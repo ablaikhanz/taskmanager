@@ -6,23 +6,51 @@ import {
   Search, 
   ListTodo, 
   AlertTriangle,
-  Key
+  Key,
+  LogOut,
+  User as UserIcon
 } from 'lucide-react';
 import { supabase, isSupabaseConfigured } from './supabaseClient';
 import TaskForm from './components/TaskForm';
 import TaskItem from './components/TaskItem';
+import Auth from './components/Auth';
 
 export default function App() {
+  const [user, setUser] = useState(null);
+  const [authLoading, setAuthLoading] = useState(true);
   const [tasks, setTasks] = useState([]);
-  const [loading, setLoading] = useState(isSupabaseConfigured);
+  const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
   const [filter, setFilter] = useState('all'); // 'all' | 'active' | 'completed'
   const [searchQuery, setSearchQuery] = useState('');
 
-  // Загрузка задач из таблицы 'tasks'
-  const fetchTasks = async () => {
+  // 1. Отслеживание авторизации пользователя
+  useEffect(() => {
     if (!isSupabaseConfigured) {
-      setLoading(false);
+      setAuthLoading(false);
+      return;
+    }
+
+    // Получаем текущую сессию
+    supabase.auth.getSession().then(({ data: { session } }) => {
+      setUser(session?.user ?? null);
+      setAuthLoading(false);
+    });
+
+    // Слушаем изменения статуса авторизации (вход, выход, обновление токена)
+    const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
+      setUser(session?.user ?? null);
+      setAuthLoading(false);
+    });
+
+    return () => {
+      subscription?.unsubscribe();
+    };
+  }, []);
+
+  // 2. Загрузка задач из таблицы 'tasks'
+  const fetchTasks = async () => {
+    if (!isSupabaseConfigured || !user) {
       return;
     }
 
@@ -45,18 +73,18 @@ export default function App() {
     }
   };
 
-  // Первоначальная загрузка и Realtime-подписка
+  // 3. Загрузка задач и Realtime-подписка при входе пользователя
   useEffect(() => {
-    if (!isSupabaseConfigured) {
-      setLoading(false);
+    if (!user || !isSupabaseConfigured) {
+      setTasks([]);
       return;
     }
 
     fetchTasks();
 
-    // Подписка на изменения в реальном времени
+    // Realtime подписка
     const channel = supabase
-      .channel('tasks-channel')
+      .channel('tasks-user-channel')
       .on(
         'postgres_changes',
         { event: '*', schema: 'public', table: 'tasks' },
@@ -75,9 +103,20 @@ export default function App() {
     return () => {
       supabase.removeChannel(channel);
     };
-  }, []);
+  }, [user]);
 
-  // Добавление новой задачи
+  // 4. Выход из аккаунта
+  const handleSignOut = async () => {
+    try {
+      await supabase.auth.signOut();
+      setUser(null);
+      setTasks([]);
+    } catch (err) {
+      console.error('Ошибка выхода:', err);
+    }
+  };
+
+  // 5. Добавление новой задачи
   const handleAddTask = async (title) => {
     if (!isSupabaseConfigured) {
       setError('Сначала укажите ваши ключи в файле .env');
@@ -86,9 +125,15 @@ export default function App() {
 
     try {
       setError(null);
+      
+      const payload = {
+        title,
+        is_completed: false
+      };
+
       const { data, error: insertError } = await supabase
         .from('tasks')
-        .insert([{ title, is_completed: false }])
+        .insert([payload])
         .select()
         .single();
 
@@ -103,14 +148,12 @@ export default function App() {
     }
   };
 
-  // Переключение статуса выполнения задачи
+  // 6. Переключение статуса выполнения задачи
   const handleToggleComplete = async (taskId, is_completed) => {
-    // Оптимистичное обновление в UI
     setTasks((prev) =>
       prev.map((t) => (t.id === taskId ? { ...t, is_completed } : t))
     );
 
-    // Анимация конфетти при завершении задачи
     if (is_completed) {
       confetti({
         particleCount: 50,
@@ -134,7 +177,7 @@ export default function App() {
     }
   };
 
-  // Обновление заголовка задачи
+  // 7. Обновление заголовка задачи
   const handleUpdateTitle = async (taskId, title) => {
     setTasks((prev) =>
       prev.map((t) => (t.id === taskId ? { ...t, title } : t))
@@ -154,7 +197,7 @@ export default function App() {
     }
   };
 
-  // Удаление задачи
+  // 8. Удаление задачи
   const handleDeleteTask = async (taskId) => {
     const prevTasks = [...tasks];
     setTasks((prev) => prev.filter((t) => t.id !== taskId));
@@ -173,7 +216,7 @@ export default function App() {
     }
   };
 
-  // Фильтрация и поиск
+  // 9. Фильтрация и поиск
   const filteredTasks = useMemo(() => {
     return tasks.filter((task) => {
       const matchesSearch = task.title.toLowerCase().includes(searchQuery.toLowerCase());
@@ -190,6 +233,15 @@ export default function App() {
   const completedCount = tasks.filter((t) => t.is_completed).length;
   const progressPercent = totalCount === 0 ? 0 : Math.round((completedCount / totalCount) * 100);
 
+  // Экран начальной загрузки проверки сессии
+  if (authLoading) {
+    return (
+      <div className="app-container" style={{ justifyContent: 'center', alignItems: 'center' }}>
+        <div className="spinner" style={{ width: '40px', height: '40px' }} />
+      </div>
+    );
+  }
+
   return (
     <div className="app-container">
       {/* Шапка приложения */}
@@ -203,21 +255,34 @@ export default function App() {
               <h1 className="logo-title">Менеджер задач</h1>
             </div>
             <p style={{ fontSize: '12px', color: 'var(--text-muted)' }}>
-              Создание и отслеживание задач
+              Supabase Auth + Database
             </p>
           </div>
         </div>
 
-        <div className="header-actions">
-          <button
-            className="btn-icon"
-            onClick={fetchTasks}
-            title="Обновить задачи"
-            disabled={loading}
-          >
-            <RefreshCw size={18} className={loading ? 'spinner' : ''} />
-          </button>
-        </div>
+        {user && (
+          <div className="header-actions">
+            <div className="user-profile-badge" title={user.email}>
+              <UserIcon size={14} color="var(--accent-primary)" />
+              <span className="user-email-text">{user.email}</span>
+            </div>
+            <button
+              className="btn-icon"
+              onClick={fetchTasks}
+              title="Обновить задачи"
+              disabled={loading}
+            >
+              <RefreshCw size={18} className={loading ? 'spinner' : ''} />
+            </button>
+            <button
+              className="btn-icon logout"
+              onClick={handleSignOut}
+              title="Выйти из аккаунта"
+            >
+              <LogOut size={18} />
+            </button>
+          </div>
+        )}
       </header>
 
       {/* Предупреждение, если не заполнен .env */}
@@ -225,135 +290,142 @@ export default function App() {
         <div className="error-banner" style={{ backgroundColor: 'rgba(56, 189, 248, 0.1)', borderColor: 'rgba(56, 189, 248, 0.3)', color: '#93c5fd' }}>
           <Key size={18} style={{ flexShrink: 0 }} />
           <div style={{ flex: 1 }}>
-            Укажите <code>VITE_SUPABASE_URL</code> и <code>VITE_SUPABASE_ANON_KEY</code> в файле <strong>.env</strong>, чтобы загрузить задачи из Supabase.
+            Укажите <code>VITE_SUPABASE_URL</code> и <code>VITE_SUPABASE_ANON_KEY</code> в файле <strong>.env</strong>, чтобы подключить Supabase.
           </div>
         </div>
       )}
 
-      {/* Ошибки от Supabase, если возникли */}
-      {error && (
-        <div className="error-banner">
-          <AlertTriangle size={18} style={{ flexShrink: 0 }} />
-          <div style={{ flex: 1 }}>{error}</div>
-          <button
-            className="btn-secondary"
-            style={{ padding: '4px 8px', fontSize: '11px' }}
-            onClick={() => setError(null)}
-          >
-            Скрыть
-          </button>
-        </div>
-      )}
-
-      {/* Прогресс-бар и статистика */}
-      <div className="stats-card">
-        <div className="stats-header">
-          <span className="stats-title">Прогресс выполнения</span>
-          <span className="stats-counter">
-            {completedCount} из {totalCount} ({progressPercent}%)
-          </span>
-        </div>
-        <div className="progress-bar-container">
-          <div
-            className="progress-bar-fill"
-            style={{ width: `${progressPercent}%` }}
-          />
-        </div>
-        <div className="stats-pills">
-          <div className="stats-pill">
-            <span className="stats-pill-label">Всего</span>
-            <span className="stats-pill-value">{totalCount}</span>
-          </div>
-          <div className="stats-pill">
-            <span className="stats-pill-label">В процессе</span>
-            <span className="stats-pill-value" style={{ color: 'var(--accent-primary)' }}>
-              {totalCount - completedCount}
-            </span>
-          </div>
-          <div className="stats-pill">
-            <span className="stats-pill-label">Выполнено</span>
-            <span className="stats-pill-value" style={{ color: 'var(--success)' }}>
-              {completedCount}
-            </span>
-          </div>
-        </div>
-      </div>
-
-      {/* Форма добавления новой задачи */}
-      <TaskForm onAddTask={handleAddTask} />
-
-      {/* Фильтры и поиск */}
-      {totalCount > 0 && (
-        <div className="controls-bar">
-          <div className="filter-tabs">
-            <button
-              className={`filter-tab ${filter === 'all' ? 'active' : ''}`}
-              onClick={() => setFilter('all')}
-            >
-              Все ({totalCount})
-            </button>
-            <button
-              className={`filter-tab ${filter === 'active' ? 'active' : ''}`}
-              onClick={() => setFilter('active')}
-            >
-              Активные ({totalCount - completedCount})
-            </button>
-            <button
-              className={`filter-tab ${filter === 'completed' ? 'active' : ''}`}
-              onClick={() => setFilter('completed')}
-            >
-              Выполненные ({completedCount})
-            </button>
-          </div>
-
-          <div className="search-box">
-            <Search size={16} className="search-icon" />
-            <input
-              type="text"
-              className="search-input"
-              placeholder="Поиск задач..."
-              value={searchQuery}
-              onChange={(e) => setSearchQuery(e.target.value)}
-            />
-          </div>
-        </div>
-      )}
-
-      {/* Список задач */}
-      <main className="tasks-list">
-        {loading && tasks.length === 0 ? (
-          <div className="empty-state">
-            <div className="spinner" style={{ width: '32px', height: '32px', marginBottom: '16px' }} />
-            <div className="empty-title">Загрузка задач...</div>
-          </div>
-        ) : filteredTasks.length > 0 ? (
-          filteredTasks.map((task) => (
-            <TaskItem
-              key={task.id}
-              task={task}
-              onToggleComplete={handleToggleComplete}
-              onDeleteTask={handleDeleteTask}
-              onUpdateTitle={handleUpdateTitle}
-            />
-          ))
-        ) : (
-          <div className="empty-state">
-            <ListTodo className="empty-icon" />
-            <div className="empty-title">
-              {searchQuery
-                ? 'Ничего не найдено'
-                : filter === 'completed'
-                ? 'Нет выполненных задач'
-                : filter === 'active'
-                ? 'Все задачи выполнены! 🎉'
-                : 'Список задач пуст'}
+      {/* Если пользователь не авторизован — показываем экран Входа / Регистрации */}
+      {!user ? (
+        <Auth onAuthSuccess={(authUser) => setUser(authUser)} />
+      ) : (
+        <>
+          {/* Ошибки от Supabase, если возникли */}
+          {error && (
+            <div className="error-banner">
+              <AlertTriangle size={18} style={{ flexShrink: 0 }} />
+              <div style={{ flex: 1 }}>{error}</div>
+              <button
+                className="btn-secondary"
+                style={{ padding: '4px 8px', fontSize: '11px' }}
+                onClick={() => setError(null)}
+              >
+                Скрыть
+              </button>
             </div>
-            <div className="empty-subtitle">
-              Добавьте задачу с помощью поля ввода выше
+          )}
+
+          {/* Прогресс-бар и статистика */}
+          <div className="stats-card">
+            <div className="stats-header">
+              <span className="stats-title">Прогресс выполнения</span>
+              <span className="stats-counter">
+                {completedCount} из {totalCount} ({progressPercent}%)
+              </span>
+            </div>
+            <div className="progress-bar-container">
+              <div
+                className="progress-bar-fill"
+                style={{ width: `${progressPercent}%` }}
+              />
+            </div>
+            <div className="stats-pills">
+              <div className="stats-pill">
+                <span className="stats-pill-label">Всего</span>
+                <span className="stats-pill-value">{totalCount}</span>
+              </div>
+              <div className="stats-pill">
+                <span className="stats-pill-label">В процессе</span>
+                <span className="stats-pill-value" style={{ color: 'var(--accent-primary)' }}>
+                  {totalCount - completedCount}
+                </span>
+              </div>
+              <div className="stats-pill">
+                <span className="stats-pill-label">Выполнено</span>
+                <span className="stats-pill-value" style={{ color: 'var(--success)' }}>
+                  {completedCount}
+                </span>
+              </div>
             </div>
           </div>
-        )}
-      </main>
+
+          {/* Форма добавления новой задачи */}
+          <TaskForm onAddTask={handleAddTask} />
+
+          {/* Фильтры и поиск */}
+          {totalCount > 0 && (
+            <div className="controls-bar">
+              <div className="filter-tabs">
+                <button
+                  className={`filter-tab ${filter === 'all' ? 'active' : ''}`}
+                  onClick={() => setFilter('all')}
+                >
+                  Все ({totalCount})
+                </button>
+                <button
+                  className={`filter-tab ${filter === 'active' ? 'active' : ''}`}
+                  onClick={() => setFilter('active')}
+                >
+                  Активные ({totalCount - completedCount})
+                </button>
+                <button
+                  className={`filter-tab ${filter === 'completed' ? 'active' : ''}`}
+                  onClick={() => setFilter('completed')}
+                >
+                  Выполненные ({completedCount})
+                </button>
+              </div>
+
+              <div className="search-box">
+                <Search size={16} className="search-icon" />
+                <input
+                  type="text"
+                  className="search-input"
+                  placeholder="Поиск задач..."
+                  value={searchQuery}
+                  onChange={(e) => setSearchQuery(e.target.value)}
+                />
+              </div>
+            </div>
+          )}
+
+          {/* Список задач */}
+          <main className="tasks-list">
+            {loading && tasks.length === 0 ? (
+              <div className="empty-state">
+                <div className="spinner" style={{ width: '32px', height: '32px', marginBottom: '16px' }} />
+                <div className="empty-title">Загрузка задач...</div>
+              </div>
+            ) : filteredTasks.length > 0 ? (
+              filteredTasks.map((task) => (
+                <TaskItem
+                  key={task.id}
+                  task={task}
+                  onToggleComplete={handleToggleComplete}
+                  onDeleteTask={handleDeleteTask}
+                  onUpdateTitle={handleUpdateTitle}
+                />
+              ))
+            ) : (
+              <div className="empty-state">
+                <ListTodo className="empty-icon" />
+                <div className="empty-title">
+                  {searchQuery
+                    ? 'Ничего не найдено'
+                    : filter === 'completed'
+                    ? 'Нет выполненных задач'
+                    : filter === 'active'
+                    ? 'Все задачи выполнены! 🎉'
+                    : 'Список задач пуст'}
+                </div>
+                <div className="empty-subtitle">
+                  Добавьте задачу с помощью поля ввода выше
+                </div>
+              </div>
+            )}
+          </main>
+        </>
+      )}
     </div>
   );
 }
