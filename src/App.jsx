@@ -1,10 +1,10 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import confetti from 'canvas-confetti';
-import { 
-  CheckCircle2, 
-  RefreshCw, 
-  Search, 
-  ListTodo, 
+import {
+  CheckCircle2,
+  RefreshCw,
+  Search,
+  ListTodo,
   AlertTriangle,
   Key,
   LogOut,
@@ -125,7 +125,7 @@ export default function App() {
 
     try {
       setError(null);
-      
+
       const payload = {
         title,
         is_completed: false
@@ -426,10 +426,10 @@ export default function App() {
                   {searchQuery
                     ? 'Ничего не найдено'
                     : filter === 'completed'
-                    ? 'Нет выполненных задач'
-                    : filter === 'active'
-                    ? 'Все задачи выполнены! 🎉'
-                    : 'Список задач пуст'}
+                      ? 'Нет выполненных задач'
+                      : filter === 'active'
+                        ? 'Все задачи выполнены! 🎉'
+                        : 'Список задач пуст'}
                 </div>
                 <div className="empty-subtitle">
                   Добавьте задачу с помощью поля ввода выше
