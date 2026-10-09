@@ -37,7 +37,7 @@ export default function App() {
       setAuthLoading(false);
     });
 
-    // Слушаем изменения статуса авторизации (вход, выход, обновление токена)
+    // Слушаем изменения статуса авторизации (вход, выход, обновление токена, OAuth callback)
     const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
       setUser(session?.user ?? null);
       setAuthLoading(false);
@@ -233,6 +233,10 @@ export default function App() {
   const completedCount = tasks.filter((t) => t.is_completed).length;
   const progressPercent = totalCount === 0 ? 0 : Math.round((completedCount / totalCount) * 100);
 
+  // Данные профиля пользователя (включая аватар от Google OAuth, если есть)
+  const avatarUrl = user?.user_metadata?.avatar_url || user?.user_metadata?.picture;
+  const displayName = user?.user_metadata?.full_name || user?.user_metadata?.name || user?.email;
+
   // Экран начальной загрузки проверки сессии
   if (authLoading) {
     return (
@@ -263,8 +267,17 @@ export default function App() {
         {user && (
           <div className="header-actions">
             <div className="user-profile-badge" title={user.email}>
-              <UserIcon size={14} color="var(--accent-primary)" />
-              <span className="user-email-text">{user.email}</span>
+              {avatarUrl ? (
+                <img
+                  src={avatarUrl}
+                  alt={displayName}
+                  className="user-avatar-img"
+                  referrerPolicy="no-referrer"
+                />
+              ) : (
+                <UserIcon size={14} color="var(--accent-primary)" />
+              )}
+              <span className="user-email-text">{displayName}</span>
             </div>
             <button
               className="btn-icon"
