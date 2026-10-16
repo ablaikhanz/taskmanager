@@ -1,10 +1,10 @@
 import React, { useState, useEffect, useMemo, useRef } from 'react';
 import confetti from 'canvas-confetti';
-import { 
-  CheckCircle2, 
-  RefreshCw, 
-  Search, 
-  ListTodo, 
+import {
+  CheckCircle2,
+  RefreshCw,
+  Search,
+  ListTodo,
   AlertTriangle,
   Key,
   LogOut,
@@ -25,7 +25,7 @@ export default function App() {
   const [error, setError] = useState(null);
   const [filter, setFilter] = useState('all'); // 'all' | 'active' | 'completed'
   const [searchQuery, setSearchQuery] = useState('');
-  
+
   // Состояния для смены аватара
   const [avatarLoading, setAvatarLoading] = useState(false);
   const [avatarSuccessMsg, setAvatarSuccessMsg] = useState('');
@@ -135,7 +135,8 @@ export default function App() {
       setAvatarSuccessMsg('');
 
       const fileExt = file.name.split('.').pop();
-      const filePath = `user-avatars/${user.id}-${Date.now()}.${fileExt}`;
+      const filePath = `${user.id}/${Date.now()}.${fileExt}`;
+
 
       // 1. Загружаем в bucket 'avatars'
       const { error: uploadError } = await supabase.storage
@@ -221,7 +222,7 @@ export default function App() {
       // прикрепляем ссылку к названию задачи, чтобы данные гарантированно сохранились!
       if (insertError && (insertError.message.includes('file_url') || insertError.code === 'PGRST204')) {
         console.warn('Колонки file_url нет в таблице tasks, сохраняем ссылку в тексте задачи');
-        const fallbackTitle = fileData?.fileUrl 
+        const fallbackTitle = fileData?.fileUrl
           ? `${title}\n📎 Прикреплен файл: ${fileData.fileUrl}`
           : title;
 
@@ -561,10 +562,10 @@ export default function App() {
                   {searchQuery
                     ? 'Ничего не найдено'
                     : filter === 'completed'
-                    ? 'Нет выполненных задач'
-                    : filter === 'active'
-                    ? 'Все задачи выполнены! 🎉'
-                    : 'Список задач пуст'}
+                      ? 'Нет выполненных задач'
+                      : filter === 'active'
+                        ? 'Все задачи выполнены! 🎉'
+                        : 'Список задач пуст'}
                 </div>
                 <div className="empty-subtitle">
                   Добавьте задачу с помощью поля ввода выше
