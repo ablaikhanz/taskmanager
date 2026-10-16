@@ -1,14 +1,16 @@
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect, useMemo, useRef } from 'react';
 import confetti from 'canvas-confetti';
-import {
-  CheckCircle2,
-  RefreshCw,
-  Search,
-  ListTodo,
+import { 
+  CheckCircle2, 
+  RefreshCw, 
+  Search, 
+  ListTodo, 
   AlertTriangle,
   Key,
   LogOut,
-  User as UserIcon
+  User as UserIcon,
+  Camera,
+  Check
 } from 'lucide-react';
 import { supabase, isSupabaseConfigured } from './supabaseClient';
 import TaskForm from './components/TaskForm';
@@ -23,6 +25,11 @@ export default function App() {
   const [error, setError] = useState(null);
   const [filter, setFilter] = useState('all'); // 'all' | 'active' | 'completed'
   const [searchQuery, setSearchQuery] = useState('');
+  
+  // Состояния для смены аватара
+  const [avatarLoading, setAvatarLoading] = useState(false);
+  const [avatarSuccessMsg, setAvatarSuccessMsg] = useState('');
+  const avatarInputRef = useRef(null);
 
   // 1. Отслеживание авторизации пользователя
   useEffect(() => {
@@ -105,7 +112,73 @@ export default function App() {
     };
   }, [user]);
 
-  // 4. Выход из аккаунта
+  // 4. Загрузка и смена аватара пользователя в bucket 'avatars'
+  const handleAvatarFileChange = async (e) => {
+    const file = e.target.files?.[0];
+    if (!file || !user) return;
+
+    // Проверяем тип файла
+    if (!file.type.startsWith('image/')) {
+      setError('Для аватара можно использовать только изображения (JPEG, PNG, WEBP, GIF)');
+      return;
+    }
+
+    // Ограничение по размеру (до 5 МБ)
+    if (file.size > 5 * 1024 * 1024) {
+      setError('Размер изображения для аватара не должен превышать 5 МБ');
+      return;
+    }
+
+    try {
+      setAvatarLoading(true);
+      setError(null);
+      setAvatarSuccessMsg('');
+
+      const fileExt = file.name.split('.').pop();
+      const filePath = `user-avatars/${user.id}-${Date.now()}.${fileExt}`;
+
+      // 1. Загружаем в bucket 'avatars'
+      const { error: uploadError } = await supabase.storage
+        .from('avatars')
+        .upload(filePath, file, {
+          cacheControl: '3600',
+          upsert: true
+        });
+
+      if (uploadError) {
+        throw new Error(`Ошибка загрузки аватара в Storage: ${uploadError.message}. Убедитесь, что бакет 'avatars' открыт для записи.`);
+      }
+
+      // 2. Получаем публичный URL
+      const { data: { publicUrl } } = supabase.storage
+        .from('avatars')
+        .getPublicUrl(filePath);
+
+      // 3. Обновляем профиль пользователя в Supabase Auth
+      const { data: updateData, error: updateError } = await supabase.auth.updateUser({
+        data: { avatar_url: publicUrl }
+      });
+
+      if (updateError) throw updateError;
+
+      if (updateData?.user) {
+        setUser(updateData.user);
+      }
+
+      setAvatarSuccessMsg('Аватар успешно обновлен!');
+      setTimeout(() => setAvatarSuccessMsg(''), 4000);
+    } catch (err) {
+      console.error('Ошибка смены аватара:', err);
+      setError(err.message || 'Не удалось обновить аватар');
+    } finally {
+      setAvatarLoading(false);
+      if (avatarInputRef.current) {
+        avatarInputRef.current.value = '';
+      }
+    }
+  };
+
+  // 5. Выход из аккаунта
   const handleSignOut = async () => {
     try {
       await supabase.auth.signOut();
@@ -116,8 +189,8 @@ export default function App() {
     }
   };
 
-  // 5. Добавление новой задачи
-  const handleAddTask = async (title) => {
+  // 6. Добавление новой задачи (с поддержкой прикрепления файлов)
+  const handleAddTask = async (title, fileData = null) => {
     if (!isSupabaseConfigured) {
       setError('Сначала укажите ваши ключи в файле .env');
       return;
@@ -126,18 +199,43 @@ export default function App() {
     try {
       setError(null);
 
+      // Формируем полезную нагрузку
       const payload = {
         title,
         is_completed: false
       };
 
-      const { data, error: insertError } = await supabase
+      if (fileData?.fileUrl) {
+        payload.file_url = fileData.fileUrl;
+        payload.file_name = fileData.fileName;
+      }
+
+      // Пытаемся вставить в таблицу tasks со столбцами file_url и file_name
+      let { data, error: insertError } = await supabase
         .from('tasks')
         .insert([payload])
         .select()
         .single();
 
-      if (insertError) throw insertError;
+      // Если в таблице еще не созданы колонки file_url/file_name, делаем безопасный fallback:
+      // прикрепляем ссылку к названию задачи, чтобы данные гарантированно сохранились!
+      if (insertError && (insertError.message.includes('file_url') || insertError.code === 'PGRST204')) {
+        console.warn('Колонки file_url нет в таблице tasks, сохраняем ссылку в тексте задачи');
+        const fallbackTitle = fileData?.fileUrl 
+          ? `${title}\n📎 Прикреплен файл: ${fileData.fileUrl}`
+          : title;
+
+        const fallbackResult = await supabase
+          .from('tasks')
+          .insert([{ title: fallbackTitle, is_completed: false }])
+          .select()
+          .single();
+
+        if (fallbackResult.error) throw fallbackResult.error;
+        data = fallbackResult.data;
+      } else if (insertError) {
+        throw insertError;
+      }
 
       if (data) {
         setTasks((prev) => [data, ...prev.filter(t => t.id !== data.id)]);
@@ -148,7 +246,7 @@ export default function App() {
     }
   };
 
-  // 6. Переключение статуса выполнения задачи
+  // 7. Переключение статуса выполнения задачи
   const handleToggleComplete = async (taskId, is_completed) => {
     setTasks((prev) =>
       prev.map((t) => (t.id === taskId ? { ...t, is_completed } : t))
@@ -177,7 +275,7 @@ export default function App() {
     }
   };
 
-  // 7. Обновление заголовка задачи
+  // 8. Обновление заголовка задачи
   const handleUpdateTitle = async (taskId, title) => {
     setTasks((prev) =>
       prev.map((t) => (t.id === taskId ? { ...t, title } : t))
@@ -197,7 +295,7 @@ export default function App() {
     }
   };
 
-  // 8. Удаление задачи
+  // 9. Удаление задачи
   const handleDeleteTask = async (taskId) => {
     const prevTasks = [...tasks];
     setTasks((prev) => prev.filter((t) => t.id !== taskId));
@@ -216,10 +314,11 @@ export default function App() {
     }
   };
 
-  // 9. Фильтрация и поиск
+  // 10. Фильтрация и поиск
   const filteredTasks = useMemo(() => {
     return tasks.filter((task) => {
-      const matchesSearch = task.title.toLowerCase().includes(searchQuery.toLowerCase());
+      const titleText = (task.title || '').toLowerCase();
+      const matchesSearch = titleText.includes(searchQuery.toLowerCase());
       if (!matchesSearch) return false;
 
       if (filter === 'active') return !task.is_completed;
@@ -233,7 +332,7 @@ export default function App() {
   const completedCount = tasks.filter((t) => t.is_completed).length;
   const progressPercent = totalCount === 0 ? 0 : Math.round((completedCount / totalCount) * 100);
 
-  // Данные профиля пользователя (включая аватар от Google OAuth, если есть)
+  // Данные профиля пользователя (включая аватар от Supabase Storage или Google OAuth)
   const avatarUrl = user?.user_metadata?.avatar_url || user?.user_metadata?.picture;
   const displayName = user?.user_metadata?.full_name || user?.user_metadata?.name || user?.email;
 
@@ -259,26 +358,54 @@ export default function App() {
               <h1 className="logo-title">Менеджер задач</h1>
             </div>
             <p style={{ fontSize: '12px', color: 'var(--text-muted)' }}>
-              Supabase Auth + Database
+              Supabase Auth + Database + Storage
             </p>
           </div>
         </div>
 
         {user && (
           <div className="header-actions">
-            <div className="user-profile-badge" title={user.email}>
-              {avatarUrl ? (
-                <img
-                  src={avatarUrl}
-                  alt={displayName}
-                  className="user-avatar-img"
-                  referrerPolicy="no-referrer"
-                />
-              ) : (
-                <UserIcon size={14} color="var(--accent-primary)" />
-              )}
+            {/* Скрытый инпут для смены аватара */}
+            <input
+              type="file"
+              ref={avatarInputRef}
+              onChange={handleAvatarFileChange}
+              accept="image/*"
+              style={{ display: 'none' }}
+              disabled={avatarLoading}
+            />
+
+            {/* Бейдж пользователя с возможностью кликнуть и сменить аватарку */}
+            <div
+              className="user-profile-badge interactive"
+              title="Нажмите на аватарку, чтобы изменить фото"
+              onClick={() => avatarInputRef.current?.click()}
+            >
+              <div className="avatar-wrapper">
+                {avatarLoading ? (
+                  <div className="avatar-spinner-overlay">
+                    <div className="spinner" style={{ width: '14px', height: '14px' }} />
+                  </div>
+                ) : avatarUrl ? (
+                  <img
+                    src={avatarUrl}
+                    alt={displayName}
+                    className="user-avatar-img"
+                    referrerPolicy="no-referrer"
+                  />
+                ) : (
+                  <div className="default-avatar-icon">
+                    <UserIcon size={14} color="var(--accent-primary)" />
+                  </div>
+                )}
+                <div className="avatar-hover-overlay">
+                  <Camera size={12} color="#ffffff" />
+                </div>
+              </div>
+
               <span className="user-email-text">{displayName}</span>
             </div>
+
             <button
               className="btn-icon"
               onClick={fetchTasks}
@@ -297,6 +424,14 @@ export default function App() {
           </div>
         )}
       </header>
+
+      {/* Уведомление об успешной смене аватара */}
+      {avatarSuccessMsg && (
+        <div className="auth-alert success" style={{ marginBottom: '20px' }}>
+          <Check size={18} style={{ flexShrink: 0 }} />
+          <span>{avatarSuccessMsg}</span>
+        </div>
+      )}
 
       {/* Предупреждение, если не заполнен .env */}
       {!isSupabaseConfigured && (
@@ -362,7 +497,7 @@ export default function App() {
             </div>
           </div>
 
-          {/* Форма добавления новой задачи */}
+          {/* Форма добавления новой задачи с файлами/изображениями */}
           <TaskForm onAddTask={handleAddTask} />
 
           {/* Фильтры и поиск */}
@@ -426,10 +561,10 @@ export default function App() {
                   {searchQuery
                     ? 'Ничего не найдено'
                     : filter === 'completed'
-                      ? 'Нет выполненных задач'
-                      : filter === 'active'
-                        ? 'Все задачи выполнены! 🎉'
-                        : 'Список задач пуст'}
+                    ? 'Нет выполненных задач'
+                    : filter === 'active'
+                    ? 'Все задачи выполнены! 🎉'
+                    : 'Список задач пуст'}
                 </div>
                 <div className="empty-subtitle">
                   Добавьте задачу с помощью поля ввода выше
