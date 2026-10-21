@@ -2,7 +2,7 @@ import React, { useState, useRef } from 'react';
 import { Plus, Sparkles, Paperclip, X, Image as ImageIcon, FileText, File } from 'lucide-react';
 import { supabase } from '../supabaseClient';
 
-export default function TaskForm({ onAddTask, disabled }) {
+export default function TaskForm({ onAddTask, disabled, user }) {
   const [title, setTitle] = useState('');
   const [selectedFile, setSelectedFile] = useState(null);
   const [filePreview, setFilePreview] = useState(null);
@@ -52,30 +52,33 @@ export default function TaskForm({ onAddTask, disabled }) {
       setIsSubmitting(true);
       let fileData = null;
 
-      // Если выбран файл, загружаем его в bucket 'avatars' (в папку task-attachments)
+      // Если выбран файл, загружаем его в приватный bucket 'task-files' в папку текущего пользователя (<user_id>/...)
       if (selectedFile) {
         setUploadProgressText('Загрузка файла в Supabase Storage...');
-        const fileExt = selectedFile.name.split('.').pop();
-        const safeName = selectedFile.name.replace(/[^a-zA-Z0-9.-]/g, '_');
-        const filePath = `task-attachments/${Date.now()}_${safeName}`;
+
+        // Определяем ID текущего пользователя
+        const currentUserId = user?.id || (await supabase.auth.getUser()).data?.user?.id;
+        if (!currentUserId) {
+          throw new Error('Не удалось определить пользователя. Пожалуйста, выполните вход повторно.');
+        }
+
+        const safeName = selectedFile.name.replace(/[^a-zA-Z0-9._-]/g, '_');
+        // Путь ОБЯЗАТЕЛЬНО должен начинаться с ${currentUserId}/ для соответствия RLS политике
+        const filePath = `${currentUserId}/${Date.now()}_${safeName}`;
 
         const { data: uploadResult, error: uploadError } = await supabase.storage
-          .from('avatars')
+          .from('task-files')
           .upload(filePath, selectedFile, {
             cacheControl: '3600',
             upsert: false
           });
 
         if (uploadError) {
-          throw new Error(`Ошибка загрузки файла в Storage: ${uploadError.message}. Убедитесь, что в бакете 'avatars' настроены политики доступа (RLS Policy).`);
+          throw new Error(`Ошибка загрузки в бакет 'task-files': ${uploadError.message}. Убедитесь, что RLS-политика INSERT разрешает загрузку в папку (${currentUserId}/...).`);
         }
 
-        const { data: { publicUrl } } = supabase.storage
-          .from('avatars')
-          .getPublicUrl(filePath);
-
         fileData = {
-          fileUrl: publicUrl,
+          fileUrl: filePath, // Относительный путь в бакете task-files
           fileName: selectedFile.name,
           fileType: selectedFile.type
         };

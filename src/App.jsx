@@ -499,7 +499,7 @@ export default function App() {
           </div>
 
           {/* Форма добавления новой задачи с файлами/изображениями */}
-          <TaskForm onAddTask={handleAddTask} />
+          <TaskForm onAddTask={handleAddTask} user={user} />
 
           {/* Фильтры и поиск */}
           {totalCount > 0 && (
