@@ -10,7 +10,9 @@ import {
   LogOut,
   User as UserIcon,
   Camera,
-  Check
+  Check,
+  Tag,
+  X as XIcon
 } from 'lucide-react';
 import { supabase, isSupabaseConfigured } from './supabaseClient';
 import TaskForm from './components/TaskForm';
@@ -25,6 +27,10 @@ export default function App() {
   const [error, setError] = useState(null);
   const [filter, setFilter] = useState('all'); // 'all' | 'active' | 'completed'
   const [searchQuery, setSearchQuery] = useState('');
+  const [filterCategoryId, setFilterCategoryId] = useState(null);
+
+  // Категории
+  const [categories, setCategories] = useState([]);
 
   // Состояния для смены аватара
   const [avatarLoading, setAvatarLoading] = useState(false);
@@ -80,14 +86,31 @@ export default function App() {
     }
   };
 
+  // 2b. Загрузка категорий
+  const fetchCategories = async () => {
+    if (!isSupabaseConfigured || !user) return;
+    try {
+      const { data, error: fetchError } = await supabase
+        .from('categories')
+        .select('*')
+        .order('created_at', { ascending: true });
+      if (fetchError) throw fetchError;
+      setCategories(data || []);
+    } catch (err) {
+      console.error('Ошибка загрузки категорий:', err);
+    }
+  };
+
   // 3. Загрузка задач и Realtime-подписка при входе пользователя
   useEffect(() => {
     if (!user || !isSupabaseConfigured) {
       setTasks([]);
+      setCategories([]);
       return;
     }
 
     fetchTasks();
+    fetchCategories();
 
     // Realtime подписка
     const channel = supabase
@@ -185,13 +208,19 @@ export default function App() {
       await supabase.auth.signOut();
       setUser(null);
       setTasks([]);
+      setCategories([]);
     } catch (err) {
       console.error('Ошибка выхода:', err);
     }
   };
 
-  // 6. Добавление новой задачи (с поддержкой прикрепления файлов)
-  const handleAddTask = async (title, fileData = null) => {
+  // 5b. Добавление категории из TaskForm
+  const handleCategoryCreated = (newCategory) => {
+    setCategories((prev) => [...prev, newCategory]);
+  };
+
+  // 6. Добавление новой задачи (с поддержкой прикрепления файлов и категорий)
+  const handleAddTask = async (title, fileData = null, categoryId = null) => {
     if (!isSupabaseConfigured) {
       setError('Сначала укажите ваши ключи в файле .env');
       return;
@@ -211,6 +240,10 @@ export default function App() {
         payload.file_name = fileData.fileName;
       }
 
+      if (categoryId) {
+        payload.categories_id = categoryId;
+      }
+
       // Пытаемся вставить в таблицу tasks со столбцами file_url и file_name
       let { data, error: insertError } = await supabase
         .from('tasks')
@@ -226,9 +259,12 @@ export default function App() {
           ? `${title}\n📎 Прикреплен файл: ${fileData.fileUrl}`
           : title;
 
+        const fallbackPayload = { title: fallbackTitle, is_completed: false };
+        if (categoryId) fallbackPayload.categories_id = categoryId;
+
         const fallbackResult = await supabase
           .from('tasks')
-          .insert([{ title: fallbackTitle, is_completed: false }])
+          .insert([fallbackPayload])
           .select()
           .single();
 
@@ -322,11 +358,13 @@ export default function App() {
       const matchesSearch = titleText.includes(searchQuery.toLowerCase());
       if (!matchesSearch) return false;
 
+      if (filterCategoryId && task.categories_id !== filterCategoryId) return false;
+
       if (filter === 'active') return !task.is_completed;
       if (filter === 'completed') return task.is_completed;
       return true;
     });
-  }, [tasks, filter, searchQuery]);
+  }, [tasks, filter, searchQuery, filterCategoryId]);
 
   // Статистика
   const totalCount = tasks.length;
@@ -499,7 +537,12 @@ export default function App() {
           </div>
 
           {/* Форма добавления новой задачи с файлами/изображениями */}
-          <TaskForm onAddTask={handleAddTask} user={user} />
+          <TaskForm
+            onAddTask={handleAddTask}
+            user={user}
+            categories={categories}
+            onCategoryCreated={handleCategoryCreated}
+          />
 
           {/* Фильтры и поиск */}
           {totalCount > 0 && (
@@ -538,6 +581,31 @@ export default function App() {
             </div>
           )}
 
+          {/* Фильтр по категориям */}
+          {categories.length > 0 && (
+            <div className="category-filter-bar">
+              <Tag size={13} style={{ color: 'var(--text-muted)', flexShrink: 0 }} />
+              <button
+                className={`category-filter-chip ${filterCategoryId === null ? 'active' : ''}`}
+                onClick={() => setFilterCategoryId(null)}
+              >
+                Все категории
+              </button>
+              {categories.map(cat => (
+                <button
+                  key={cat.id}
+                  className={`category-filter-chip ${filterCategoryId === cat.id ? 'active' : ''}`}
+                  onClick={() => setFilterCategoryId(filterCategoryId === cat.id ? null : cat.id)}
+                >
+                  {cat.name}
+                  {filterCategoryId === cat.id && (
+                    <XIcon size={10} style={{ marginLeft: 4 }} />
+                  )}
+                </button>
+              ))}
+            </div>
+          )}
+
           {/* Список задач */}
           <main className="tasks-list">
             {loading && tasks.length === 0 ? (
@@ -553,6 +621,7 @@ export default function App() {
                   onToggleComplete={handleToggleComplete}
                   onDeleteTask={handleDeleteTask}
                   onUpdateTitle={handleUpdateTitle}
+                  categories={categories}
                 />
               ))
             ) : (

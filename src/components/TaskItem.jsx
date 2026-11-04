@@ -1,13 +1,16 @@
 import React, { useState, useEffect } from 'react';
-import { Check, Trash2, Edit2, X, Clock, ExternalLink, Download, Image as ImageIcon, FileText, File } from 'lucide-react';
+import { Check, Trash2, Edit2, X, Clock, ExternalLink, Download, Image as ImageIcon, FileText, File, Tag } from 'lucide-react';
 import { supabase } from '../supabaseClient';
 
-export default function TaskItem({ task, onToggleComplete, onDeleteTask, onUpdateTitle }) {
+export default function TaskItem({ task, onToggleComplete, onDeleteTask, onUpdateTitle, categories }) {
   const [isEditing, setIsEditing] = useState(false);
   const [editTitle, setEditTitle] = useState(task.title);
   const [isUpdating, setIsUpdating] = useState(false);
   const [showFullImage, setShowFullImage] = useState(false);
   
+  // Категория задачи
+  const taskCategory = categories?.find(c => c.id === task.categories_id) || null;
+
   // URL для отображения (подписанный для private бакета task-files или обычный публичный)
   const [resolvedFileUrl, setResolvedFileUrl] = useState(null);
   const [isResolvingUrl, setIsResolvingUrl] = useState(false);
@@ -229,6 +232,14 @@ export default function TaskItem({ task, onToggleComplete, onDeleteTask, onUpdat
         ) : (
           <div className="task-content">
             <div className="task-title">{displayTitle}</div>
+
+            {/* Бейдж категории */}
+            {taskCategory && (
+              <div className="task-category-badge">
+                <Tag size={10} />
+                <span>{taskCategory.name}</span>
+              </div>
+            )}
 
             {/* Отображение прикрепленного файла или картинки */}
             {rawFileUrl && (

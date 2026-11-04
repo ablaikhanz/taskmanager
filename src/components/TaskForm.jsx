@@ -1,14 +1,68 @@
-import React, { useState, useRef } from 'react';
-import { Plus, Sparkles, Paperclip, X, Image as ImageIcon, FileText, File } from 'lucide-react';
+import React, { useState, useRef, useEffect } from 'react';
+import { Plus, Sparkles, Paperclip, X, Image as ImageIcon, FileText, File, Tag, ChevronDown, Check, FolderPlus } from 'lucide-react';
 import { supabase } from '../supabaseClient';
 
-export default function TaskForm({ onAddTask, disabled, user }) {
+export default function TaskForm({ onAddTask, disabled, user, categories, onCategoryCreated }) {
   const [title, setTitle] = useState('');
   const [selectedFile, setSelectedFile] = useState(null);
   const [filePreview, setFilePreview] = useState(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [uploadProgressText, setUploadProgressText] = useState('');
   const fileInputRef = useRef(null);
+
+  // Категории
+  const [selectedCategoryId, setSelectedCategoryId] = useState(null);
+  const [isCategoryDropdownOpen, setIsCategoryDropdownOpen] = useState(false);
+  const [isCreatingCategory, setIsCreatingCategory] = useState(false);
+  const [newCategoryName, setNewCategoryName] = useState('');
+  const [isSavingCategory, setIsSavingCategory] = useState(false);
+  const categoryDropdownRef = useRef(null);
+  const newCategoryInputRef = useRef(null);
+
+  // Закрытие дропдауна по клику вне
+  useEffect(() => {
+    const handleClickOutside = (e) => {
+      if (categoryDropdownRef.current && !categoryDropdownRef.current.contains(e.target)) {
+        setIsCategoryDropdownOpen(false);
+        setIsCreatingCategory(false);
+        setNewCategoryName('');
+      }
+    };
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => document.removeEventListener('mousedown', handleClickOutside);
+  }, []);
+
+  // Фокус на инпуте создания категории
+  useEffect(() => {
+    if (isCreatingCategory && newCategoryInputRef.current) {
+      newCategoryInputRef.current.focus();
+    }
+  }, [isCreatingCategory]);
+
+  const selectedCategory = categories?.find(c => c.id === selectedCategoryId) || null;
+
+  const handleCreateCategory = async () => {
+    const name = newCategoryName.trim();
+    if (!name) return;
+    try {
+      setIsSavingCategory(true);
+      const { data, error } = await supabase
+        .from('categories')
+        .insert([{ name, user_id: user?.id }])
+        .select()
+        .single();
+      if (error) throw error;
+      onCategoryCreated?.(data);
+      setSelectedCategoryId(data.id);
+      setNewCategoryName('');
+      setIsCreatingCategory(false);
+      setIsCategoryDropdownOpen(false);
+    } catch (err) {
+      alert('Ошибка создания категории: ' + err.message);
+    } finally {
+      setIsSavingCategory(false);
+    }
+  };
 
   const handleFileChange = (e) => {
     const file = e.target.files?.[0];
@@ -85,11 +139,12 @@ export default function TaskForm({ onAddTask, disabled, user }) {
       }
 
       setUploadProgressText('Сохранение задачи...');
-      await onAddTask(cleanTitle, fileData);
+      await onAddTask(cleanTitle, fileData, selectedCategoryId);
 
       // Сброс формы
       setTitle('');
       handleRemoveFile();
+      setSelectedCategoryId(null);
     } catch (err) {
       console.error('Ошибка добавления задачи:', err);
       alert(err.message);
@@ -149,6 +204,121 @@ export default function TaskForm({ onAddTask, disabled, user }) {
               </>
             )}
           </button>
+        </div>
+
+        {/* Строка с выбором категории */}
+        <div className="task-form-category-row">
+          <div className="category-dropdown-wrapper" ref={categoryDropdownRef}>
+            <button
+              type="button"
+              className={`btn-category-select ${selectedCategory ? 'has-category' : ''}`}
+              onClick={() => {
+                setIsCategoryDropdownOpen(v => !v);
+                setIsCreatingCategory(false);
+                setNewCategoryName('');
+              }}
+              disabled={disabled || isSubmitting}
+              title="Выбрать категорию"
+            >
+              <Tag size={13} />
+              <span className="category-select-label">
+                {selectedCategory ? selectedCategory.name : 'Категория'}
+              </span>
+              {selectedCategory ? (
+                <span
+                  className="category-clear-btn"
+                  title="Убрать категорию"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    setSelectedCategoryId(null);
+                    setIsCategoryDropdownOpen(false);
+                  }}
+                >
+                  <X size={11} />
+                </span>
+              ) : (
+                <ChevronDown size={13} className={`category-chevron ${isCategoryDropdownOpen ? 'open' : ''}`} />
+              )}
+            </button>
+
+            {isCategoryDropdownOpen && (
+              <div className="category-dropdown">
+                {/* Список существующих категорий */}
+                {categories && categories.length > 0 ? (
+                  <div className="category-list">
+                    {categories.map(cat => (
+                      <button
+                        key={cat.id}
+                        type="button"
+                        className={`category-option ${selectedCategoryId === cat.id ? 'selected' : ''}`}
+                        onClick={() => {
+                          setSelectedCategoryId(cat.id);
+                          setIsCategoryDropdownOpen(false);
+                          setIsCreatingCategory(false);
+                        }}
+                      >
+                        <Tag size={12} />
+                        <span>{cat.name}</span>
+                        {selectedCategoryId === cat.id && <Check size={12} className="category-option-check" />}
+                      </button>
+                    ))}
+                  </div>
+                ) : (
+                  !isCreatingCategory && (
+                    <div className="category-empty-msg">Нет категорий. Создайте первую!</div>
+                  )
+                )}
+
+                {/* Форма создания новой категории */}
+                {isCreatingCategory ? (
+                  <div className="category-create-form">
+                    <input
+                      ref={newCategoryInputRef}
+                      type="text"
+                      className="category-create-input"
+                      placeholder="Название категории..."
+                      value={newCategoryName}
+                      onChange={(e) => setNewCategoryName(e.target.value)}
+                      onKeyDown={(e) => {
+                        if (e.key === 'Enter') { e.preventDefault(); handleCreateCategory(); }
+                        if (e.key === 'Escape') { setIsCreatingCategory(false); setNewCategoryName(''); }
+                      }}
+                      disabled={isSavingCategory}
+                      maxLength={50}
+                    />
+                    <div className="category-create-actions">
+                      <button
+                        type="button"
+                        className="btn-primary"
+                        style={{ padding: '5px 12px', fontSize: '12px' }}
+                        onClick={handleCreateCategory}
+                        disabled={!newCategoryName.trim() || isSavingCategory}
+                      >
+                        {isSavingCategory ? <div className="spinner" style={{ width: '12px', height: '12px' }} /> : 'Создать'}
+                      </button>
+                      <button
+                        type="button"
+                        className="btn-secondary"
+                        style={{ padding: '5px 10px', fontSize: '12px' }}
+                        onClick={() => { setIsCreatingCategory(false); setNewCategoryName(''); }}
+                      >
+                        Отмена
+                      </button>
+                    </div>
+                  </div>
+                ) : (
+                  <button
+                    type="button"
+                    className="category-create-btn"
+                    onClick={() => setIsCreatingCategory(true)}
+                  >
+                    <FolderPlus size={13} />
+                    <span>Создать категорию</span>
+                  </button>
+                )}
+              </div>
+            )}
+          </div>
         </div>
 
         {/* Индикатор загрузки */}
